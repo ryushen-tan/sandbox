@@ -160,7 +160,7 @@ export function ScrollReels({ items }: ScrollReelsProps) {
       {/* Camera PiP — bottom right */}
       <div className="absolute bottom-5 right-5 z-30 flex flex-col items-stretch gap-2">
         {/* Video */}
-        <div className="h-52 w-36 overflow-hidden rounded-2xl border border-white/15 shadow-2xl shadow-black/70">
+        <div className="h-72 w-48 overflow-hidden rounded-2xl border border-white/15 shadow-2xl shadow-black/70">
           <video
             ref={webcamRef}
             autoPlay
