@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import type { ReelItem } from "../types"
 import { useWebcam } from "../hooks/useWebcam"
+import { useFaceAnalysis } from "../hooks/useFaceAnalysis"
+import { useSmileSocket } from "../hooks/useSmileSocket"
 
 type ScrollReelsProps = {
   items: ReelItem[]
@@ -19,7 +21,9 @@ export function ScrollReels({ items }: ScrollReelsProps) {
   const reelRefs = useRef<Array<HTMLElement | null>>([])
   const videoRefs = useRef<Array<HTMLVideoElement | null>>([])
   const webcamRef = useRef<HTMLVideoElement>(null)
-  useWebcam(webcamRef)
+  const { isReady } = useWebcam(webcamRef)
+  const { smileDetected, faceDetected, isLoading } = useFaceAnalysis(webcamRef, isReady)
+  useSmileSocket(smileDetected)
 
   const activeItem = items[activeIndex]
   const progressSegments = useMemo(
@@ -161,6 +165,16 @@ export function ScrollReels({ items }: ScrollReelsProps) {
           muted
           playsInline
           className="h-full w-full object-cover scale-x-[-1]"
+        />
+        {/* Smile indicator dot */}
+        <div
+          className={`absolute top-2 right-2 h-2.5 w-2.5 rounded-full transition-colors duration-150 ${
+            isLoading || !faceDetected
+              ? 'bg-white/30'
+              : smileDetected
+              ? 'bg-red-400 shadow-red-400/60 shadow-md'
+              : 'bg-green-400 shadow-green-400/60 shadow-md'
+          }`}
         />
       </div>
     </main>
