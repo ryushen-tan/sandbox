@@ -198,15 +198,23 @@ export function ScrollReels({ items }: ScrollReelsProps) {
           <p className="text-xs uppercase tracking-[0.5em] text-stone-400">Experimental</p>
           <h1 className="mt-1 text-2xl font-semibold tracking-tight">Scroll Reels</h1>
         </div>
-        <div className="flex gap-1.5">
-          {progressSegments.map((segment) => (
-            <span
-              key={segment.id}
-              className={`h-1.5 rounded-full transition-all ${
-                segment.isActive ? "w-10 bg-stone-50" : "w-3 bg-stone-50/30"
-              }`}
-            />
-          ))}
+        <div className="flex items-center gap-3">
+          <a
+            href="/"
+            className="pointer-events-auto rounded-lg border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-stone-200 backdrop-blur-sm transition-colors hover:bg-white/20"
+          >
+            PvP
+          </a>
+          <div className="flex gap-1.5">
+            {progressSegments.map((segment) => (
+              <span
+                key={segment.id}
+                className={`h-1.5 rounded-full transition-all ${
+                  segment.isActive ? "w-10 bg-stone-50" : "w-3 bg-stone-50/30"
+                }`}
+              />
+            ))}
+          </div>
         </div>
       </header>
 
