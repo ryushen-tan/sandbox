@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import argparse
 import json
-import os
 import re
+import subprocess
 import sys
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,10 +13,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 LINKS_FILE = ROOT / "fe/src/features/scroll-reels/data/instagram-reel-links.txt"
 OUTPUT_FILE = ROOT / "fe/src/features/scroll-reels/data/reels.ts"
-DEFAULT_ENDPOINT = (
-    "https://instasnapdown.lovable.app/_serverFn/"
-    "e80308a7168d2e2e92209932c93600c1d823bcbd8779b0ef75c15b9a4e8dc376"
-)
+DEFAULT_ENDPOINT = "https://statusdownloader.com/api/fetch"
 
 
 @dataclass
@@ -96,73 +93,50 @@ def existing_records() -> dict[str, ReelRecord]:
             video_src=extract_field(block, "videoSrc"),
             poster_src=extract_field(block, "posterSrc"),
         )
+
     return records
 
 
-def server_fn_payload(url: str) -> bytes:
-    payload = {
-        "t": {
-            "t": 10,
-            "i": 0,
-            "p": {
-                "k": ["data"],
-                "v": [
-                    {
-                        "t": 10,
-                        "i": 1,
-                        "p": {"k": ["url"], "v": [{"t": 1, "s": url}]},
-                        "o": 0,
-                    }
-                ],
-            },
-            "o": 0,
-        },
-        "f": 63,
-        "m": [],
-    }
-    return json.dumps(payload).encode()
+def request_payload(url: str) -> str:
+    return json.dumps({"url": url}, separators=(",", ":"))
 
 
-def decode_tagged(value: Any) -> Any:
-    if isinstance(value, list):
-        return [decode_tagged(item) for item in value]
-    if not isinstance(value, dict):
-        return value
-
-    payload = value.get("p")
-    if isinstance(payload, dict) and "k" in payload and "v" in payload:
-        return {
-            key: decode_tagged(payload["v"][index])
-            for index, key in enumerate(payload["k"])
-            if index < len(payload["v"])
-        }
-
-    if "a" in value and isinstance(value["a"], list):
-        return [decode_tagged(item) for item in value["a"]]
-
-    if "s" in value:
-        return value["s"]
-
-    return {key: decode_tagged(item) for key, item in value.items()}
+def is_image_url(url: str | None) -> bool:
+    if not url:
+        return False
+    return any(extension in url.lower() for extension in [".jpg", ".jpeg", ".png", ".webp"])
 
 
-def fetch_record(url: str, fallback: ReelRecord | None) -> ReelRecord:
-    endpoint = os.environ.get("INSTASNAPDOWN_ENDPOINT", DEFAULT_ENDPOINT)
-    request = urllib.request.Request(
-        endpoint,
-        data=server_fn_payload(url),
-        headers={
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "Origin": "https://instasnapdown.lovable.app",
-            "Referer": "https://instasnapdown.lovable.app/",
-            "User-Agent": "Mozilla/5.0",
-            "x-tsr-serverfn": "true",
-        },
-        method="POST",
-    )
+def parse_response(payload: dict[str, Any], record: ReelRecord) -> ReelRecord:
+    if not payload.get("success"):
+        record.error = str(payload.get("error") or payload.get("message") or payload)
+        return record
 
-    base = fallback or ReelRecord(
+    media_url = payload.get("mediaUrl")
+    if not isinstance(media_url, str) or not media_url:
+        record.error = f"No mediaUrl returned: {json.dumps(payload)[:300]}"
+        return record
+
+    media_type = payload.get("mediaType")
+    if media_type and media_type != "video":
+        record.error = f"Unsupported mediaType: {media_type}"
+        return record
+
+    title = payload.get("title")
+    if isinstance(title, str) and title and record.title == "Curate slot":
+        record.title = title
+
+    thumbnail_url = payload.get("thumbnailUrl")
+    if is_image_url(thumbnail_url):
+        record.poster_src = thumbnail_url
+
+    record.video_src = media_url
+    record.error = None
+    return record
+
+
+def fetch_record(url: str, fallback: ReelRecord | None, endpoint: str) -> ReelRecord:
+    record = fallback or ReelRecord(
         id=reel_id(url),
         title="Curate slot",
         creator="@replace-this",
@@ -170,27 +144,48 @@ def fetch_record(url: str, fallback: ReelRecord | None) -> ReelRecord:
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            decoded = decode_tagged(json.loads(response.read().decode()))
+        completed = subprocess.run(
+            [
+                "curl",
+                endpoint,
+                "-sS",
+                "-X",
+                "POST",
+                "-H",
+                "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0",
+                "-H",
+                "Accept: */*",
+                "-H",
+                "Accept-Language: en-CA,en-US;q=0.9,en;q=0.8",
+                "-H",
+                "Referer: https://statusdownloader.com/instagram-story-downloader",
+                "-H",
+                "Content-Type: application/json",
+                "-H",
+                "Origin: https://statusdownloader.com",
+                "-H",
+                "Sec-Fetch-Dest: empty",
+                "-H",
+                "Sec-Fetch-Mode: cors",
+                "-H",
+                "Sec-Fetch-Site: same-origin",
+                "--data-raw",
+                request_payload(url),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=45,
+        )
+        stdout = completed.stdout.strip()
+        if not stdout:
+            record.error = "Empty response"
+            return record
+
+        return parse_response(json.loads(stdout), record)
     except Exception as error:
-        base.error = str(error)
-        return base
-
-    result = decoded.get("result", {}) if isinstance(decoded, dict) else {}
-    if isinstance(result, dict) and result.get("error"):
-        base.error = str(result["error"])
-        return base
-
-    media = result.get("media", []) if isinstance(result, dict) else []
-    video = next((item for item in media if item.get("type") == "video" and item.get("url")), None)
-    if not video:
-        base.error = "No video media returned"
-        return base
-
-    base.video_src = video["url"]
-    base.poster_src = video.get("thumbnail") or base.poster_src
-    base.error = None
-    return base
+        record.error = str(error)
+        return record
 
 
 def ts_string(value: str) -> str:
@@ -223,19 +218,32 @@ def write_reels(records: list[ReelRecord]) -> None:
     OUTPUT_FILE.write_text("\n".join(lines) + "\n")
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Refresh Instagram reel MP4 URLs through StatusDownloader.")
+    parser.add_argument("--dry-run", action="store_true", help="Fetch and print statuses without writing reels.ts.")
+    parser.add_argument("--limit", type=int, help="Only process the first N links.")
+    parser.add_argument("--url", action="append", help="Process this URL instead of instagram-reel-links.txt.")
+    parser.add_argument("--workers", type=int, default=4, help="Parallel worker count.")
+    parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
+    return parser.parse_args()
+
+
 def main() -> int:
-    links = read_links()
+    args = parse_args()
+    links = [canonical_url(url) for url in args.url] if args.url else read_links()
+    if args.limit:
+        links = links[: args.limit]
+
     if not links:
         print(f"No reel links found in {LINKS_FILE}")
         return 1
 
     existing = existing_records()
     results: dict[str, ReelRecord] = {}
-    max_workers = min(8, len(links))
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
-            executor.submit(fetch_record, url, existing.get(shortcode_for(url))): url
+            executor.submit(fetch_record, url, existing.get(shortcode_for(url)), args.endpoint): url
             for url in links
         }
         for future in as_completed(futures):
@@ -246,14 +254,20 @@ def main() -> int:
             print(f"{shortcode_for(url)}: {status}")
 
     ordered = [results[shortcode_for(url)] for url in links]
-    write_reels(ordered)
-
     failures = [record for record in ordered if record.error]
+
+    if not args.dry_run:
+        write_reels(ordered)
+
     if failures:
         print(f"Completed with {len(failures)} unresolved reel(s).")
         return 1
 
-    print(f"Wrote {len(ordered)} reel(s) to {OUTPUT_FILE}")
+    if args.dry_run:
+        print(f"Dry run fetched {len(ordered)} reel(s).")
+    else:
+        print(f"Wrote {len(ordered)} reel(s) to {OUTPUT_FILE}")
+
     return 0
 
 
