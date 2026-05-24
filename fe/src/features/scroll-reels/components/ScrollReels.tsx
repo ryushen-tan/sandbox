@@ -9,15 +9,77 @@ type ScrollReelsProps = {
   items: ReelItem[]
 }
 
+type PlayableReelItem = ReelItem & {
+  videoSrc: string
+}
+
+type FeedReelItem = PlayableReelItem & {
+  feedId: string
+}
+
 const MIN_REEL_DURATION_MS = 3000
 const REEL_DURATION_SPREAD_MS = 2000
+const REEL_START_TIME_SECONDS = 3
+const UP_NEXT_BUFFER_SIZE = 3
 
 function getRandomReelDuration() {
   return MIN_REEL_DURATION_MS + Math.random() * REEL_DURATION_SPREAD_MS
 }
 
+function hasVideoSrc(item: ReelItem): item is PlayableReelItem {
+  return Boolean(item.videoSrc)
+}
+
+function pickRandomItem(items: PlayableReelItem[], avoidItemId?: string) {
+  if (items.length <= 1) return items[0]
+
+  let item = items[Math.floor(Math.random() * items.length)]
+  if (item.id === avoidItemId) {
+    item = items[(items.findIndex((candidate) => candidate.id === item.id) + 1) % items.length]
+  }
+
+  return item
+}
+
+function createFeedItem(item: PlayableReelItem): FeedReelItem {
+  return {
+    ...item,
+    feedId: `${item.id}-${crypto.randomUUID()}`,
+  }
+}
+
+function appendRandomItems(feedItems: FeedReelItem[], sourceItems: PlayableReelItem[], count: number) {
+  const nextFeedItems = [...feedItems]
+
+  for (let index = 0; index < count; index += 1) {
+    const previousItemId = nextFeedItems.at(-1)?.id
+    const nextItem = pickRandomItem(sourceItems, previousItemId)
+    if (!nextItem) break
+
+    nextFeedItems.push(createFeedItem(nextItem))
+  }
+
+  return nextFeedItems
+}
+
+function createInitialFeed(items: PlayableReelItem[]) {
+  return appendRandomItems([], items, UP_NEXT_BUFFER_SIZE + 1)
+}
+
+function ensureFeedBuffer(feedItems: FeedReelItem[], activeIndex: number, sourceItems: PlayableReelItem[]) {
+  const remainingItems = feedItems.length - activeIndex - 1
+  const missingItems = UP_NEXT_BUFFER_SIZE - remainingItems
+
+  if (missingItems <= 0) return feedItems
+
+  return appendRandomItems(feedItems, sourceItems, missingItems)
+}
+
 export function ScrollReels({ items }: ScrollReelsProps) {
   const [activeIndex, setActiveIndex] = useState(0)
+  const [failedItemIds, setFailedItemIds] = useState<Set<string>>(() => new Set())
+  const [isAudioEnabled, setIsAudioEnabled] = useState(true)
+  const [feedItems, setFeedItems] = useState<FeedReelItem[]>(() => createInitialFeed(items.filter(hasVideoSrc)))
   const reelRefs = useRef<Array<HTMLElement | null>>([])
   const videoRefs = useRef<Array<HTMLVideoElement | null>>([])
   const webcamRef = useRef<HTMLVideoElement>(null)
@@ -25,17 +87,27 @@ export function ScrollReels({ items }: ScrollReelsProps) {
   const { smileDetected, faceDetected, isLoading } = useFaceAnalysis(webcamRef, isReady)
   useSmileSocket(smileDetected)
 
-  const activeItem = items[activeIndex]
+  const playableSourceItems = useMemo(
+    () => items.filter(hasVideoSrc).filter((item) => !failedItemIds.has(item.id)),
+    [failedItemIds, items]
+  )
+  const activeItem = feedItems[activeIndex]
   const progressSegments = useMemo(
-    () => items.map((item, index) => ({ id: item.id, isActive: index === activeIndex })),
-    [activeIndex, items]
+    () =>
+      feedItems
+        .slice(activeIndex, activeIndex + UP_NEXT_BUFFER_SIZE + 1)
+        .map((item, index) => ({ id: item.feedId, isActive: index === 0 })),
+    [activeIndex, feedItems]
   )
 
   const scrollToIndex = useCallback((index: number) => {
-    const nextIndex = (index + items.length) % items.length
-    reelRefs.current[nextIndex]?.scrollIntoView({ behavior: "smooth", block: "start" })
-    setActiveIndex(nextIndex)
-  }, [items.length])
+    setFeedItems((currentItems) => ensureFeedBuffer(currentItems, index, playableSourceItems))
+    setActiveIndex(index)
+  }, [playableSourceItems])
+
+  const scrollToNext = useCallback(() => {
+    scrollToIndex(activeIndex + 1)
+  }, [activeIndex, scrollToIndex])
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -47,7 +119,10 @@ export function ScrollReels({ items }: ScrollReelsProps) {
         if (!focusedEntry) return
 
         const index = Number((focusedEntry.target as HTMLElement).dataset.reelIndex)
-        if (Number.isFinite(index)) setActiveIndex(index)
+        if (Number.isFinite(index)) {
+          setActiveIndex(index)
+          setFeedItems((currentItems) => ensureFeedBuffer(currentItems, index, playableSourceItems))
+        }
       },
       { threshold: [0.65, 0.8, 0.95] }
     )
@@ -57,40 +132,64 @@ export function ScrollReels({ items }: ScrollReelsProps) {
     })
 
     return () => observer.disconnect()
-  }, [items])
+  }, [feedItems, playableSourceItems])
 
   useEffect(() => {
     if (!activeItem) return
 
     const timeout = window.setTimeout(() => {
-      scrollToIndex(activeIndex + 1)
+      scrollToNext()
     }, getRandomReelDuration())
 
     return () => window.clearTimeout(timeout)
-  }, [activeIndex, activeItem, scrollToIndex])
+  }, [activeItem, scrollToNext])
+
+  useEffect(() => {
+    reelRefs.current[activeIndex]?.scrollIntoView({ behavior: "smooth", block: "start" })
+  }, [activeIndex, feedItems.length])
 
   useEffect(() => {
     videoRefs.current.forEach((video, index) => {
       if (!video) return
 
       if (index === activeIndex) {
-        void video.play().catch(() => undefined)
+        video.muted = !isAudioEnabled
+
+        if (video.readyState > 0 && video.currentTime < REEL_START_TIME_SECONDS) {
+          video.currentTime = REEL_START_TIME_SECONDS
+        }
+
+        void video.play().catch(() => {
+          video.muted = true
+          setIsAudioEnabled(false)
+          void video.play().catch(() => undefined)
+        })
       } else {
         video.pause()
       }
     })
+  }, [activeIndex, isAudioEnabled])
+
+  const enableAudio = useCallback(() => {
+    setIsAudioEnabled(true)
+
+    const activeVideo = videoRefs.current[activeIndex]
+    if (!activeVideo) return
+
+    activeVideo.muted = false
+    void activeVideo.play().catch(() => undefined)
   }, [activeIndex])
 
-  if (!items.length) {
+  if (!feedItems.length) {
     return (
       <main className="flex min-h-svh items-center justify-center bg-zinc-950 text-zinc-100">
-        No reels configured.
+        No playable reels configured.
       </main>
     )
   }
 
   return (
-    <main className="relative h-svh overflow-hidden bg-[#080806] text-stone-50">
+    <main className="relative h-svh overflow-hidden bg-[#080806] text-stone-50" onClick={enableAudio}>
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(255,122,41,0.22),transparent_30%),radial-gradient(circle_at_90%_70%,rgba(226,36,91,0.22),transparent_28%)]" />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.05)_1px,transparent_1px),linear-gradient(rgba(255,255,255,0.04)_1px,transparent_1px)] bg-[size:72px_72px] opacity-25" />
 
@@ -112,9 +211,9 @@ export function ScrollReels({ items }: ScrollReelsProps) {
       </header>
 
       <div className="relative z-10 h-svh snap-y snap-mandatory overflow-y-auto scroll-smooth">
-        {items.map((item, index) => (
+        {feedItems.map((item, index) => (
           <section
-            key={item.id}
+            key={item.feedId}
             ref={(node) => {
               reelRefs.current[index] = node
             }}
@@ -122,32 +221,31 @@ export function ScrollReels({ items }: ScrollReelsProps) {
             className="grid h-svh snap-start place-items-center px-4 py-20"
           >
             <div className="relative aspect-[9/16] h-[min(78svh,780px)] overflow-hidden rounded-[2rem] border border-white/15 bg-black shadow-2xl shadow-orange-950/30">
-              {item.videoSrc ? (
-                <video
-                  key={item.id}
-                  ref={(node) => {
-                    videoRefs.current[index] = node
-                  }}
-                  className="h-full w-full object-cover"
-                  src={item.videoSrc}
-                  poster={item.posterSrc}
-                  autoPlay={index === activeIndex}
-                  muted
-                  playsInline
-                  controls={false}
-                  preload={index === activeIndex ? "auto" : "metadata"}
-                  onEnded={() => scrollToIndex(index + 1)}
-                />
-              ) : (
-                <div className="flex h-full w-full flex-col items-center justify-center bg-[radial-gradient(circle_at_center,rgba(251,146,60,0.18),transparent_45%)] p-8 text-center">
-                  <p className="text-xs uppercase tracking-[0.45em] text-orange-200">Needs MP4</p>
-                  <p className="mt-4 text-3xl font-semibold tracking-tight">Instagram blocks embeds here.</p>
-                  <p className="mt-3 text-sm leading-6 text-stone-300">
-                    Add a direct <code className="rounded bg-white/10 px-1.5 py-0.5">videoSrc</code> MP4 URL for native
-                    autoplay and end-of-video scrolling.
-                  </p>
-                </div>
-              )}
+              <video
+                key={item.id}
+                ref={(node) => {
+                  videoRefs.current[index] = node
+                }}
+                className="h-full w-full object-cover"
+                src={item.videoSrc}
+                poster={item.posterSrc}
+                autoPlay={index === activeIndex}
+                muted={!isAudioEnabled}
+                playsInline
+                controls={false}
+                preload={index >= activeIndex && index <= activeIndex + UP_NEXT_BUFFER_SIZE ? "auto" : "metadata"}
+                onLoadedMetadata={(event) => {
+                  const video = event.currentTarget
+                  if (index === activeIndex && video.currentTime < REEL_START_TIME_SECONDS) {
+                    video.currentTime = REEL_START_TIME_SECONDS
+                  }
+                }}
+                onEnded={scrollToNext}
+                onError={() => {
+                  setFailedItemIds((current) => new Set(current).add(item.id))
+                  scrollToNext()
+                }}
+              />
             </div>
           </section>
         ))}
