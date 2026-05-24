@@ -6,6 +6,13 @@ type ScrollReelsProps = {
   items: ReelItem[]
 }
 
+const MIN_REEL_DURATION_MS = 3000
+const REEL_DURATION_SPREAD_MS = 2000
+
+function getRandomReelDuration() {
+  return MIN_REEL_DURATION_MS + Math.random() * REEL_DURATION_SPREAD_MS
+}
+
 export function ScrollReels({ items }: ScrollReelsProps) {
   const [activeIndex, setActiveIndex] = useState(0)
   const reelRefs = useRef<Array<HTMLElement | null>>([])
@@ -46,11 +53,11 @@ export function ScrollReels({ items }: ScrollReelsProps) {
   }, [items])
 
   useEffect(() => {
-    if (!activeItem || activeItem.videoSrc) return
+    if (!activeItem) return
 
     const timeout = window.setTimeout(() => {
       scrollToIndex(activeIndex + 1)
-    }, activeItem.durationMs ?? 12000)
+    }, getRandomReelDuration())
 
     return () => window.clearTimeout(timeout)
   }, [activeIndex, activeItem, scrollToIndex])
