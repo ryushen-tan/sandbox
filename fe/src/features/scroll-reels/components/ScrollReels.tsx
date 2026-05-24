@@ -17,9 +17,14 @@ type FeedReelItem = PlayableReelItem & {
   feedId: string
 }
 
+type FeedState = {
+  feedItems: FeedReelItem[]
+  remainingItems: PlayableReelItem[]
+}
+
 const MIN_REEL_DURATION_MS = 3000
 const REEL_DURATION_SPREAD_MS = 2000
-const REEL_START_TIME_SECONDS = 3
+const REEL_START_TIME_SECONDS = 1
 const UP_NEXT_BUFFER_SIZE = 3
 
 function getRandomReelDuration() {
@@ -30,15 +35,19 @@ function hasVideoSrc(item: ReelItem): item is PlayableReelItem {
   return Boolean(item.videoSrc)
 }
 
-function pickRandomItem(items: PlayableReelItem[], avoidItemId?: string) {
-  if (items.length <= 1) return items[0]
+function shuffleItems(items: PlayableReelItem[], avoidFirstItemId?: string) {
+  const shuffledItems = [...items]
 
-  let item = items[Math.floor(Math.random() * items.length)]
-  if (item.id === avoidItemId) {
-    item = items[(items.findIndex((candidate) => candidate.id === item.id) + 1) % items.length]
+  for (let index = shuffledItems.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1))
+    ;[shuffledItems[index], shuffledItems[randomIndex]] = [shuffledItems[randomIndex], shuffledItems[index]]
   }
 
-  return item
+  if (shuffledItems.length > 1 && shuffledItems[0]?.id === avoidFirstItemId) {
+    ;[shuffledItems[0], shuffledItems[1]] = [shuffledItems[1], shuffledItems[0]]
+  }
+
+  return shuffledItems
 }
 
 function createFeedItem(item: PlayableReelItem): FeedReelItem {
@@ -48,38 +57,63 @@ function createFeedItem(item: PlayableReelItem): FeedReelItem {
   }
 }
 
-function appendRandomItems(feedItems: FeedReelItem[], sourceItems: PlayableReelItem[], count: number) {
+function appendNonRepeatingItems(
+  feedItems: FeedReelItem[],
+  sourceItems: PlayableReelItem[],
+  remainingItems: PlayableReelItem[],
+  count: number
+): FeedState {
   const nextFeedItems = [...feedItems]
+  let nextRemainingItems = remainingItems.filter((item) => sourceItems.some((sourceItem) => sourceItem.id === item.id))
 
   for (let index = 0; index < count; index += 1) {
     const previousItemId = nextFeedItems.at(-1)?.id
-    const nextItem = pickRandomItem(sourceItems, previousItemId)
+    if (!nextRemainingItems.length) {
+      nextRemainingItems = shuffleItems(sourceItems, previousItemId)
+    }
+
+    const nextItem = nextRemainingItems.shift()
     if (!nextItem) break
 
     nextFeedItems.push(createFeedItem(nextItem))
   }
 
-  return nextFeedItems
+  return {
+    feedItems: nextFeedItems,
+    remainingItems: nextRemainingItems,
+  }
 }
 
-function createInitialFeed(items: PlayableReelItem[]) {
-  return appendRandomItems([], items, UP_NEXT_BUFFER_SIZE + 1)
+function createInitialFeedState(items: PlayableReelItem[]): FeedState {
+  return appendNonRepeatingItems([], items, shuffleItems(items), UP_NEXT_BUFFER_SIZE + 1)
 }
 
-function ensureFeedBuffer(feedItems: FeedReelItem[], activeIndex: number, sourceItems: PlayableReelItem[]) {
-  const remainingItems = feedItems.length - activeIndex - 1
-  const missingItems = UP_NEXT_BUFFER_SIZE - remainingItems
+function ensureFeedBuffer(
+  feedItems: FeedReelItem[],
+  activeIndex: number,
+  sourceItems: PlayableReelItem[],
+  remainingItems: PlayableReelItem[]
+): FeedState {
+  const upcomingItems = feedItems.length - activeIndex - 1
+  const missingItems = UP_NEXT_BUFFER_SIZE - upcomingItems
 
-  if (missingItems <= 0) return feedItems
+  if (missingItems <= 0) {
+    return {
+      feedItems,
+      remainingItems,
+    }
+  }
 
-  return appendRandomItems(feedItems, sourceItems, missingItems)
+  return appendNonRepeatingItems(feedItems, sourceItems, remainingItems, missingItems)
 }
 
 export function ScrollReels({ items }: ScrollReelsProps) {
   const [activeIndex, setActiveIndex] = useState(0)
   const [failedItemIds, setFailedItemIds] = useState<Set<string>>(() => new Set())
   const [isAudioEnabled, setIsAudioEnabled] = useState(true)
-  const [feedItems, setFeedItems] = useState<FeedReelItem[]>(() => createInitialFeed(items.filter(hasVideoSrc)))
+  const [feedState, setFeedState] = useState<FeedState>(() => createInitialFeedState(items.filter(hasVideoSrc)))
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const programmaticTargetIndexRef = useRef<number | null>(null)
   const reelRefs = useRef<Array<HTMLElement | null>>([])
   const videoRefs = useRef<Array<HTMLVideoElement | null>>([])
   const webcamRef = useRef<HTMLVideoElement>(null)
@@ -91,6 +125,7 @@ export function ScrollReels({ items }: ScrollReelsProps) {
     () => items.filter(hasVideoSrc).filter((item) => !failedItemIds.has(item.id)),
     [failedItemIds, items]
   )
+  const feedItems = feedState.feedItems
   const activeItem = feedItems[activeIndex]
   const progressSegments = useMemo(
     () =>
@@ -100,16 +135,32 @@ export function ScrollReels({ items }: ScrollReelsProps) {
     [activeIndex, feedItems]
   )
 
-  const scrollToIndex = useCallback((index: number) => {
-    setFeedItems((currentItems) => ensureFeedBuffer(currentItems, index, playableSourceItems))
-    setActiveIndex(index)
-  }, [playableSourceItems])
+  const scrollToIndex = useCallback(
+    (index: number) => {
+      const nextIndex = Math.max(0, index)
+
+      setFeedState((currentState) =>
+        ensureFeedBuffer(
+          currentState.feedItems,
+          nextIndex,
+          playableSourceItems,
+          currentState.remainingItems
+        )
+      )
+      programmaticTargetIndexRef.current = nextIndex
+      setActiveIndex(nextIndex)
+    },
+    [playableSourceItems]
+  )
 
   const scrollToNext = useCallback(() => {
     scrollToIndex(activeIndex + 1)
   }, [activeIndex, scrollToIndex])
 
   useEffect(() => {
+    const scrollContainer = scrollContainerRef.current
+    if (!scrollContainer) return
+
     const observer = new IntersectionObserver(
       (entries) => {
         const focusedEntry = entries
@@ -120,11 +171,25 @@ export function ScrollReels({ items }: ScrollReelsProps) {
 
         const index = Number((focusedEntry.target as HTMLElement).dataset.reelIndex)
         if (Number.isFinite(index)) {
-          setActiveIndex(index)
-          setFeedItems((currentItems) => ensureFeedBuffer(currentItems, index, playableSourceItems))
+          const programmaticTargetIndex = programmaticTargetIndexRef.current
+          if (programmaticTargetIndex !== null && index !== programmaticTargetIndex) return
+
+          if (programmaticTargetIndex === index) {
+            programmaticTargetIndexRef.current = null
+          }
+
+          setActiveIndex((currentIndex) => (currentIndex === index ? currentIndex : index))
+          setFeedState((currentState) =>
+            ensureFeedBuffer(
+              currentState.feedItems,
+              index,
+              playableSourceItems,
+              currentState.remainingItems
+            )
+          )
         }
       },
-      { threshold: [0.65, 0.8, 0.95] }
+      { root: scrollContainer, threshold: [0.65, 0.8, 0.95] }
     )
 
     reelRefs.current.forEach((node) => {
@@ -145,7 +210,11 @@ export function ScrollReels({ items }: ScrollReelsProps) {
   }, [activeItem, scrollToNext])
 
   useEffect(() => {
-    reelRefs.current[activeIndex]?.scrollIntoView({ behavior: "smooth", block: "start" })
+    const targetReel = reelRefs.current[activeIndex]
+    const scrollContainer = scrollContainerRef.current
+    if (!targetReel || !scrollContainer) return
+
+    scrollContainer.scrollTo({ top: targetReel.offsetTop, behavior: "smooth" })
   }, [activeIndex, feedItems.length])
 
   useEffect(() => {
@@ -169,6 +238,12 @@ export function ScrollReels({ items }: ScrollReelsProps) {
       }
     })
   }, [activeIndex, isAudioEnabled])
+
+  useEffect(() => {
+    for (let index = activeIndex + 1; index <= activeIndex + UP_NEXT_BUFFER_SIZE; index += 1) {
+      videoRefs.current[index]?.load()
+    }
+  }, [activeIndex, feedItems])
 
   const enableAudio = useCallback(() => {
     setIsAudioEnabled(true)
@@ -210,7 +285,7 @@ export function ScrollReels({ items }: ScrollReelsProps) {
         </div>
       </header>
 
-      <div className="relative z-10 h-svh snap-y snap-mandatory overflow-y-auto scroll-smooth">
+      <div ref={scrollContainerRef} className="relative z-10 h-svh snap-y snap-mandatory overflow-y-auto scroll-smooth">
         {feedItems.map((item, index) => (
           <section
             key={item.feedId}
