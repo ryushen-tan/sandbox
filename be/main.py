@@ -51,7 +51,7 @@ async def disconnect(sid):
     rooms.pop(code, None)
 
 
-@sio.event
+@sio.on("create-room")
 async def create_room(sid):
     code = _generate_code()
     while code in rooms:
@@ -61,7 +61,7 @@ async def create_room(sid):
     await sio.emit("room-created", {"code": code}, to=sid)
 
 
-@sio.event
+@sio.on("join-room")
 async def join_room(sid, data):
     code = str(data.get("code", "")).upper()
     room = rooms.get(code)
@@ -95,7 +95,7 @@ async def answer(sid, data):
         await sio.emit("answer", data, to=opp)
 
 
-@sio.event
+@sio.on("ice-candidate")
 async def ice_candidate(sid, data):
     code = sid_room.get(sid)
     opp = _opponent(code, sid) if code else None
@@ -105,7 +105,7 @@ async def ice_candidate(sid, data):
 
 # ── Game events ──────────────────────────────────────────────────────────────
 
-@sio.event
+@sio.on("health-update")
 async def health_update(sid, data):
     code = sid_room.get(sid)
     opp = _opponent(code, sid) if code else None
@@ -113,7 +113,7 @@ async def health_update(sid, data):
         await sio.emit("opponent-health", data, to=opp)
 
 
-@sio.event
+@sio.on("player-defeated")
 async def player_defeated(sid):
     code = sid_room.get(sid)
     if not code:
@@ -141,7 +141,14 @@ _api.add_middleware(
 ensure_storage_dirs()
 _api.mount("/files", StaticFiles(directory=str(STORAGE_PATH)), name="files")
 
-chopper = PokemonChopper()
+# Lazy — only initialised when the endpoint is actually called
+_chopper: PokemonChopper | None = None
+
+def _get_chopper() -> PokemonChopper:
+    global _chopper
+    if _chopper is None:
+        _chopper = PokemonChopper()
+    return _chopper
 
 
 @_api.get("/")
@@ -160,7 +167,7 @@ async def chop_pokemon_image(
         content = await file.read()
         if len(content) > 10 * 1024 * 1024:
             raise HTTPException(status_code=400, detail="File size must be less than 10MB")
-        result = await chopper.chop_pokemon(content, intensity)
+        result = await _get_chopper().chop_pokemon(content, intensity)
         return JSONResponse(
             content={
                 "original_path": result["original_path"],
