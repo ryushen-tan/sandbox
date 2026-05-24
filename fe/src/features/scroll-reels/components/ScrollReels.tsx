@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import type { ReelItem } from "../types"
+import { useWebcam } from "../hooks/useWebcam"
+import { useFaceAnalysis } from "../hooks/useFaceAnalysis"
+import { useSmileSocket } from "../hooks/useSmileSocket"
 
 type ScrollReelsProps = {
   items: ReelItem[]
@@ -79,6 +82,10 @@ export function ScrollReels({ items }: ScrollReelsProps) {
   const [feedItems, setFeedItems] = useState<FeedReelItem[]>(() => createInitialFeed(items.filter(hasVideoSrc)))
   const reelRefs = useRef<Array<HTMLElement | null>>([])
   const videoRefs = useRef<Array<HTMLVideoElement | null>>([])
+  const webcamRef = useRef<HTMLVideoElement>(null)
+  const { isReady } = useWebcam(webcamRef)
+  const { smileDetected, faceDetected, isLoading } = useFaceAnalysis(webcamRef, isReady)
+  useSmileSocket(smileDetected)
 
   const playableSourceItems = useMemo(
     () => items.filter(hasVideoSrc).filter((item) => !failedItemIds.has(item.id)),
@@ -247,6 +254,42 @@ export function ScrollReels({ items }: ScrollReelsProps) {
       <aside className="absolute bottom-5 left-1/2 z-20 -translate-x-1/2 rounded-full border border-white/10 bg-black/55 px-5 py-2 text-sm text-stone-300 shadow-2xl backdrop-blur">
         empty bar
       </aside>
+
+      {/* Camera PiP — bottom right */}
+      <div className="absolute bottom-5 right-5 z-30 flex flex-col items-stretch gap-2">
+        {/* Video */}
+        <div className="h-72 w-48 overflow-hidden rounded-2xl border border-white/15 shadow-2xl shadow-black/70">
+          <video
+            ref={webcamRef}
+            autoPlay
+            muted
+            playsInline
+            className="h-full w-full object-cover scale-x-[-1]"
+          />
+        </div>
+
+        {/* Status bar */}
+        <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/70 px-3 py-2 shadow-lg backdrop-blur-md">
+          <span
+            className={`h-1.5 w-1.5 shrink-0 rounded-full transition-colors duration-300 ${
+              isLoading || !faceDetected
+                ? 'bg-stone-500'
+                : smileDetected
+                ? 'bg-red-400'
+                : 'bg-emerald-400'
+            }`}
+          />
+          <span className="text-[11px] font-medium leading-none tracking-wide text-stone-300">
+            {isLoading
+              ? 'Initializing…'
+              : !faceDetected
+              ? 'No face'
+              : smileDetected
+              ? 'Smile detected'
+              : 'Straight face'}
+          </span>
+        </div>
+      </div>
     </main>
   )
 }
