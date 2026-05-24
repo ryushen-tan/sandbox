@@ -6,7 +6,6 @@ interface WaitingRoomProps {
 export function WaitingRoom({ code, onCancel }: WaitingRoomProps) {
   return (
     <main className="relative flex min-h-svh flex-col items-center justify-center gap-10 overflow-hidden bg-[#080806] px-6 text-stone-50">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_40%,rgba(255,122,41,0.12),transparent_50%)]" />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.04)_1px,transparent_1px),linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:72px_72px]" />
 
       <div className="relative flex flex-col items-center gap-8">

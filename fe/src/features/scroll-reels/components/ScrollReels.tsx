@@ -304,7 +304,6 @@ export function ScrollReels({ items, battle }: ScrollReelsProps) {
 
   return (
     <main className="relative h-svh overflow-hidden bg-[#080806] text-stone-50" onClick={enableAudio}>
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(255,122,41,0.22),transparent_30%),radial-gradient(circle_at_90%_70%,rgba(226,36,91,0.22),transparent_28%)]" />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.05)_1px,transparent_1px),linear-gradient(rgba(255,255,255,0.04)_1px,transparent_1px)] bg-[size:72px_72px] opacity-25" />
 
       <header className="pointer-events-none absolute left-0 right-0 top-0 z-20 flex items-center justify-between p-5">
@@ -334,7 +333,7 @@ export function ScrollReels({ items, battle }: ScrollReelsProps) {
             data-reel-index={index}
             className="grid h-svh snap-start place-items-center px-4 py-20"
           >
-            <div className="relative aspect-[9/16] h-[min(78svh,780px)] overflow-hidden rounded-[2rem] border border-white/15 bg-black shadow-2xl shadow-orange-950/30">
+            <div className="relative aspect-[9/16] h-[min(78svh,780px)] overflow-hidden rounded-[2rem] border border-white/15 bg-black shadow-2xl shadow-black/50">
               <video
                 key={item.id}
                 ref={(node) => {
