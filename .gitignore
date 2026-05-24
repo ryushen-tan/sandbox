@@ -83,4 +83,5 @@ Thumbs.db
 .directory
 
 # Project specific
-be/storage/
+be/storage/pokemon/original/
+be/storage/pokemon/processed/
