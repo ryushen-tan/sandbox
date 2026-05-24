@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowUpRight, Pause, Play } from "lucide-react"
 
-import { Button } from "@/components/ui/button"
 import type { ReelItem } from "../types"
 
 type ScrollReelsProps = {
@@ -10,7 +8,6 @@ type ScrollReelsProps = {
 
 export function ScrollReels({ items }: ScrollReelsProps) {
   const [activeIndex, setActiveIndex] = useState(0)
-  const [isPlaying, setIsPlaying] = useState(true)
   const reelRefs = useRef<Array<HTMLElement | null>>([])
   const videoRefs = useRef<Array<HTMLVideoElement | null>>([])
 
@@ -49,26 +46,26 @@ export function ScrollReels({ items }: ScrollReelsProps) {
   }, [items])
 
   useEffect(() => {
-    if (!isPlaying || !activeItem || activeItem.videoSrc) return
+    if (!activeItem || activeItem.videoSrc) return
 
     const timeout = window.setTimeout(() => {
       scrollToIndex(activeIndex + 1)
     }, activeItem.durationMs ?? 12000)
 
     return () => window.clearTimeout(timeout)
-  }, [activeIndex, activeItem, isPlaying, scrollToIndex])
+  }, [activeIndex, activeItem, scrollToIndex])
 
   useEffect(() => {
     videoRefs.current.forEach((video, index) => {
       if (!video) return
 
-      if (index === activeIndex && isPlaying) {
+      if (index === activeIndex) {
         void video.play().catch(() => undefined)
       } else {
         video.pause()
       }
     })
-  }, [activeIndex, isPlaying])
+  }, [activeIndex])
 
   if (!items.length) {
     return (
@@ -120,7 +117,7 @@ export function ScrollReels({ items }: ScrollReelsProps) {
                   className="h-full w-full object-cover"
                   src={item.videoSrc}
                   poster={item.posterSrc}
-                  autoPlay={isPlaying && index === activeIndex}
+                  autoPlay={index === activeIndex}
                   muted
                   playsInline
                   controls={false}
@@ -137,38 +134,13 @@ export function ScrollReels({ items }: ScrollReelsProps) {
                   </p>
                 </div>
               )}
-
-              <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/70 to-transparent p-5 pt-28">
-                <p className="text-sm font-medium text-orange-200">{item.creator}</p>
-                <h2 className="mt-1 text-2xl font-semibold tracking-tight">{item.title}</h2>
-                <p className="mt-2 max-w-xs text-sm leading-5 text-stone-300">
-                  Keep the Instagram URL for attribution/opening, and use a direct MP4/CDN URL for playback.
-                </p>
-              </div>
             </div>
           </section>
         ))}
       </div>
 
-      <aside className="absolute bottom-5 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/10 bg-black/55 p-2 shadow-2xl backdrop-blur">
-        <Button
-          type="button"
-          variant="secondary"
-          size="icon"
-          className="rounded-full"
-          onClick={() => setIsPlaying((value) => !value)}
-          aria-label={isPlaying ? "Pause auto-scroll" : "Resume auto-scroll"}
-        >
-          {isPlaying ? <Pause /> : <Play />}
-        </Button>
-        <Button type="button" variant="secondary" className="rounded-full" onClick={() => scrollToIndex(activeIndex + 1)}>
-          Next reel
-        </Button>
-        <Button type="button" variant="ghost" className="rounded-full text-stone-100 hover:text-stone-950" asChild>
-          <a href={activeItem.instagramUrl} target="_blank" rel="noreferrer">
-            Open <ArrowUpRight />
-          </a>
-        </Button>
+      <aside className="absolute bottom-5 left-1/2 z-20 -translate-x-1/2 rounded-full border border-white/10 bg-black/55 px-5 py-2 text-sm text-stone-300 shadow-2xl backdrop-blur">
+        empty bar
       </aside>
     </main>
   )
