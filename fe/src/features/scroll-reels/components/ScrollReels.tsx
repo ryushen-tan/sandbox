@@ -158,24 +158,39 @@ export function ScrollReels({ items }: ScrollReelsProps) {
       </aside>
 
       {/* Camera PiP — bottom right */}
-      <div className="absolute bottom-5 right-5 z-30 h-36 w-24 overflow-hidden rounded-2xl border border-white/15 shadow-2xl shadow-black/60">
-        <video
-          ref={webcamRef}
-          autoPlay
-          muted
-          playsInline
-          className="h-full w-full object-cover scale-x-[-1]"
-        />
-        {/* Smile indicator dot */}
-        <div
-          className={`absolute top-2 right-2 h-2.5 w-2.5 rounded-full transition-colors duration-150 ${
-            isLoading || !faceDetected
-              ? 'bg-white/30'
+      <div className="absolute bottom-5 right-5 z-30 flex flex-col items-stretch gap-2">
+        {/* Video */}
+        <div className="h-52 w-36 overflow-hidden rounded-2xl border border-white/15 shadow-2xl shadow-black/70">
+          <video
+            ref={webcamRef}
+            autoPlay
+            muted
+            playsInline
+            className="h-full w-full object-cover scale-x-[-1]"
+          />
+        </div>
+
+        {/* Status bar */}
+        <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/70 px-3 py-2 shadow-lg backdrop-blur-md">
+          <span
+            className={`h-1.5 w-1.5 shrink-0 rounded-full transition-colors duration-300 ${
+              isLoading || !faceDetected
+                ? 'bg-stone-500'
+                : smileDetected
+                ? 'bg-red-400'
+                : 'bg-emerald-400'
+            }`}
+          />
+          <span className="text-[11px] font-medium leading-none tracking-wide text-stone-300">
+            {isLoading
+              ? 'Initializing…'
+              : !faceDetected
+              ? 'No face'
               : smileDetected
-              ? 'bg-red-400 shadow-red-400/60 shadow-md'
-              : 'bg-green-400 shadow-green-400/60 shadow-md'
-          }`}
-        />
+              ? 'Smile detected'
+              : 'Straight face'}
+          </span>
+        </div>
       </div>
     </main>
   )
