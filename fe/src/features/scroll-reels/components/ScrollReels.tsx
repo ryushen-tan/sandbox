@@ -1,12 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import type { Socket } from "socket.io-client"
 
 import type { ReelItem } from "../types"
-import { useWebcam } from "../hooks/useWebcam"
 import { useFaceAnalysis } from "../hooks/useFaceAnalysis"
 import { useSmileSocket } from "../hooks/useSmileSocket"
+import { useWebcam } from "../../battle/hooks/useWebcam"
+import { useWebRTC } from "../../battle/hooks/useWebRTC"
+import { useHealthBar } from "../../battle/hooks/useHealthBar"
+import { HealthBar } from "../../battle/components/HealthBar"
+import { EndScreen } from "../../battle/components/EndScreen"
+import { getSocket } from "../../battle/socket"
+
+export type BattleProps = {
+  socket: Socket
+  isHost: boolean
+  isEnded: boolean
+  won: boolean
+  onLeave: () => void
+}
 
 type ScrollReelsProps = {
   items: ReelItem[]
+  battle?: BattleProps
 }
 
 type PlayableReelItem = ReelItem & {
@@ -107,7 +122,7 @@ function ensureFeedBuffer(
   return appendNonRepeatingItems(feedItems, sourceItems, remainingItems, missingItems)
 }
 
-export function ScrollReels({ items }: ScrollReelsProps) {
+export function ScrollReels({ items, battle }: ScrollReelsProps) {
   const [activeIndex, setActiveIndex] = useState(0)
   const [failedItemIds, setFailedItemIds] = useState<Set<string>>(() => new Set())
   const [isAudioEnabled, setIsAudioEnabled] = useState(true)
@@ -117,9 +132,33 @@ export function ScrollReels({ items }: ScrollReelsProps) {
   const reelRefs = useRef<Array<HTMLElement | null>>([])
   const videoRefs = useRef<Array<HTMLVideoElement | null>>([])
   const webcamRef = useRef<HTMLVideoElement>(null)
-  const { isReady } = useWebcam(webcamRef)
+  const oppVideoRef = useRef<HTMLVideoElement>(null)
+
+  const { isReady, stream } = useWebcam(webcamRef)
   const { smileDetected, faceDetected, isLoading } = useFaceAnalysis(webcamRef, isReady)
   useSmileSocket(smileDetected)
+
+  // Battle hooks — always called, only active when battle is present and ongoing
+  const fallbackSocket = useRef(getSocket()).current
+  const battleSocket = battle?.socket ?? fallbackSocket
+  const battleActive = !!battle && !battle.isEnded
+  const isHost = battle?.isHost ?? false
+
+  const { remoteStream } = useWebRTC(battleSocket, isHost, battleActive, stream)
+  const { hp, opponentHp } = useHealthBar(battleSocket, smileDetected, battleActive)
+
+  useEffect(() => {
+    if (oppVideoRef.current && remoteStream) {
+      oppVideoRef.current.srcObject = remoteStream
+    }
+  }, [remoteStream])
+
+  const [finalHp, setFinalHp] = useState({ mine: 100, opponent: 100 })
+  useEffect(() => {
+    if (battleActive) {
+      setFinalHp({ mine: hp, opponent: opponentHp })
+    }
+  }, [hp, opponentHp, battleActive])
 
   const playableSourceItems = useMemo(
     () => items.filter(hasVideoSrc).filter((item) => !failedItemIds.has(item.id)),
@@ -273,23 +312,15 @@ export function ScrollReels({ items }: ScrollReelsProps) {
           <p className="text-xs uppercase tracking-[0.5em] text-stone-400">Experimental</p>
           <h1 className="mt-1 text-2xl font-semibold tracking-tight">Scroll Reels</h1>
         </div>
-        <div className="flex items-center gap-3">
-          <a
-            href="/"
-            className="pointer-events-auto rounded-lg border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-stone-200 backdrop-blur-sm transition-colors hover:bg-white/20"
-          >
-            PvP
-          </a>
-          <div className="flex gap-1.5">
-            {progressSegments.map((segment) => (
-              <span
-                key={segment.id}
-                className={`h-1.5 rounded-full transition-all ${
-                  segment.isActive ? "w-10 bg-stone-50" : "w-3 bg-stone-50/30"
-                }`}
-              />
-            ))}
-          </div>
+        <div className="flex gap-1.5">
+          {progressSegments.map((segment) => (
+            <span
+              key={segment.id}
+              className={`h-1.5 rounded-full transition-all ${
+                segment.isActive ? "w-10 bg-stone-50" : "w-3 bg-stone-50/30"
+              }`}
+            />
+          ))}
         </div>
       </header>
 
@@ -334,6 +365,14 @@ export function ScrollReels({ items }: ScrollReelsProps) {
         ))}
       </div>
 
+      {/* Health bars — only during active battle */}
+      {battleActive && (
+        <>
+          <HealthBar hp={opponentHp} label="OPP" side="left" />
+          <HealthBar hp={hp} label="YOU" side="right" />
+        </>
+      )}
+
       {/* Status bar */}
       <aside className="absolute bottom-5 left-1/2 z-20 -translate-x-1/2 flex items-center gap-2.5 rounded-full border border-white/10 bg-black/60 px-5 py-2.5 shadow-2xl backdrop-blur-md transition-all duration-300">
         <span
@@ -356,7 +395,28 @@ export function ScrollReels({ items }: ScrollReelsProps) {
         </span>
       </aside>
 
-      {/* Camera PiP — bottom right */}
+      {/* Opponent camera PiP — bottom left (battle only) */}
+      {battle && (
+        <div className="absolute bottom-5 left-5 z-30 h-72 w-48 overflow-hidden rounded-2xl border border-white/15 shadow-2xl shadow-black/70">
+          <video
+            ref={oppVideoRef}
+            autoPlay
+            muted
+            playsInline
+            className="h-full w-full object-cover scale-x-[-1]"
+          />
+          {!remoteStream && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+              <span className="text-xs text-stone-500">Connecting…</span>
+            </div>
+          )}
+          <div className="absolute bottom-2 left-2 rounded-md bg-black/50 px-1.5 py-0.5 text-[10px] text-stone-400 backdrop-blur">
+            Opponent
+          </div>
+        </div>
+      )}
+
+      {/* My camera PiP — bottom right */}
       <div className="absolute bottom-5 right-5 z-30 h-72 w-48 overflow-hidden rounded-2xl border border-white/15 shadow-2xl shadow-black/70">
         <video
           ref={webcamRef}
@@ -365,7 +425,23 @@ export function ScrollReels({ items }: ScrollReelsProps) {
           playsInline
           className="h-full w-full object-cover scale-x-[-1]"
         />
+        {battle && (
+          <div className="absolute bottom-2 right-2 rounded-md bg-black/50 px-1.5 py-0.5 text-[10px] text-stone-400 backdrop-blur">
+            You
+          </div>
+        )}
       </div>
+
+      {/* End screen overlay */}
+      {battle?.isEnded && (
+        <EndScreen
+          won={battle.won}
+          myHp={finalHp.mine}
+          opponentHp={finalHp.opponent}
+          onPlayAgain={battle.onLeave}
+          onLeave={battle.onLeave}
+        />
+      )}
     </main>
   )
 }

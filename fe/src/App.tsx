@@ -1,16 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from "@/components/ui/button"
-import { ScrollReelsPage } from "@/pages/ScrollReelsPage"
+import { ScrollReels } from "@/features/scroll-reels/components/ScrollReels"
+import { reels } from "@/features/scroll-reels/data/reels"
 import { WaitingRoom } from "@/features/battle/components/WaitingRoom"
-import { BattleScreen } from "@/features/battle/components/BattleScreen"
 import { useRoom } from "@/features/battle/hooks/useRoom"
 import { getSocket } from "@/features/battle/socket"
 import { routes } from "@/routes/paths"
 
-function HomePage() {
-  const { phase, error, createRoom, joinRoom, reset } = useRoom()
-  const socket = useRef(getSocket()).current
-  const [finalHp, setFinalHp] = useState({ mine: 100, opponent: 100 })
+function Lobby({
+  onCreateRoom,
+  onJoinRoom,
+  error,
+}: {
+  onCreateRoom: () => void
+  onJoinRoom: (code: string) => void
+  error: string | null
+}) {
   const [code, setCode] = useState('')
   const [connected, setConnected] = useState(false)
 
@@ -25,46 +30,20 @@ function HomePage() {
     }
   }, [])
 
-  if (phase.type === 'waiting') {
-    return <WaitingRoom code={phase.code} onCancel={reset} />
-  }
-
-  if (phase.type === 'battle' || phase.type === 'ended') {
-    return (
-      <BattleScreen
-        socket={socket}
-        isHost={phase.type === 'battle' ? phase.isHost : false}
-        onEnd={() => {}}
-        finalHp={finalHp}
-        onFinalHpChange={setFinalHp}
-      />
-    )
-  }
-
   return (
     <main className="flex min-h-svh flex-col items-center justify-center gap-8 bg-background px-6 text-center text-foreground">
       <div className="max-w-xl space-y-3">
         <p className="text-sm font-medium text-muted-foreground">React + Tailwind CSS + shadcn/ui</p>
-        <h1 className="text-4xl font-semibold tracking-tight">Project scaffold is ready.</h1>
+        <h1 className="text-4xl font-semibold tracking-tight">Don't Laugh.</h1>
         <p className="text-muted-foreground">
-          Start filling in the prepared folders under <code className="rounded bg-muted px-1 py-0.5">src</code>.
+          Watch reels. Keep a straight face. Last one standing wins.
         </p>
       </div>
 
-      <Button asChild>
-        <a href={routes.scrollReels}>Open scroll reels</a>
-      </Button>
-
       <div className="w-full max-w-sm space-y-3">
-        <div className="flex items-center gap-3">
-          <div className="h-px flex-1 bg-border" />
-          <span className="text-xs text-muted-foreground">PvP Battle</span>
-          <div className="h-px flex-1 bg-border" />
-        </div>
-
         <Button
           className="w-full"
-          onClick={createRoom}
+          onClick={onCreateRoom}
           disabled={!connected}
         >
           {connected ? 'Create Room' : 'Connecting…'}
@@ -80,14 +59,14 @@ function HomePage() {
           <input
             value={code}
             onChange={(e) => setCode(e.target.value.toUpperCase().slice(0, 4))}
-            onKeyDown={(e) => e.key === 'Enter' && code.length === 4 && joinRoom(code)}
+            onKeyDown={(e) => e.key === 'Enter' && code.length === 4 && onJoinRoom(code)}
             placeholder="X X X X"
             maxLength={4}
             className="flex-1 rounded-md border border-input bg-background px-4 py-2 text-center font-mono text-lg uppercase tracking-[0.3em] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-ring"
           />
           <Button
             variant="outline"
-            onClick={() => code.length === 4 && joinRoom(code)}
+            onClick={() => code.length === 4 && onJoinRoom(code)}
             disabled={code.length !== 4 || !connected}
           >
             Join
@@ -108,9 +87,57 @@ function HomePage() {
 }
 
 function App() {
-  const path = window.location.pathname
-  if (path === routes.scrollReels) return <ScrollReelsPage />
-  return <HomePage />
+  const { phase, error, createRoom, joinRoom, reset } = useRoom()
+  const socket = useRef(getSocket()).current
+  const [path, setPath] = useState(window.location.pathname)
+
+  useEffect(() => {
+    const onPop = () => setPath(window.location.pathname)
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+
+  // Sync URL with battle phase
+  useEffect(() => {
+    const target = phase.type === 'battle' || phase.type === 'ended' ? routes.scrollReels : routes.home
+    if (window.location.pathname !== target) {
+      window.history.pushState({}, '', target)
+      setPath(target)
+    }
+  }, [phase.type])
+
+  // Battle/ended → scroll reels with battle overlay
+  if (phase.type === 'battle' || phase.type === 'ended') {
+    return (
+      <ScrollReels
+        items={reels}
+        battle={{
+          socket,
+          isHost: phase.type === 'battle' ? phase.isHost : false,
+          isEnded: phase.type === 'ended',
+          won: phase.type === 'ended' ? phase.won : false,
+          onLeave: () => {
+            reset()
+            window.history.pushState({}, '', routes.home)
+            setPath(routes.home)
+          },
+        }}
+      />
+    )
+  }
+
+  // Direct visit to /scroll-reels while idle → solo mode
+  if (path === routes.scrollReels && phase.type === 'idle') {
+    return <ScrollReels items={reels} />
+  }
+
+  // Waiting for opponent
+  if (phase.type === 'waiting') {
+    return <WaitingRoom code={phase.code} onCancel={reset} />
+  }
+
+  // Idle → lobby
+  return <Lobby onCreateRoom={createRoom} onJoinRoom={joinRoom} error={error} />
 }
 
 export default App
