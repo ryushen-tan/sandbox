@@ -5,14 +5,17 @@ import json
 import re
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[1]
 LINKS_FILE = ROOT / "fe/src/features/scroll-reels/data/instagram-reel-links.txt"
 OUTPUT_FILE = ROOT / "fe/src/features/scroll-reels/data/reels.ts"
+DEFAULT_PROXY_FILE = ROOT / "fe/src/features/scroll-reels/data/proxies.txt"
 DEFAULT_ENDPOINT = "https://statusdownloader.com/api/fetch"
 
 
@@ -101,6 +104,41 @@ def request_payload(url: str) -> str:
     return json.dumps({"url": url}, separators=(",", ":"))
 
 
+def normalize_proxy(raw_proxy: str) -> str | None:
+    proxy = raw_proxy.strip()
+    if not proxy or proxy.startswith("#"):
+        return None
+
+    if "://" in proxy:
+        return proxy
+
+    if "@" in proxy:
+        return f"http://{proxy}"
+
+    parts = proxy.split(":", 3)
+    if len(parts) == 4:
+        host, port, username, password = parts
+        return f"http://{quote(username, safe='')}:{quote(password, safe='')}@{host}:{port}"
+
+    if len(parts) == 2:
+        return f"http://{proxy}"
+
+    raise ValueError(f"Unsupported proxy format: {proxy}")
+
+
+def read_proxies(proxy_file: Path | None) -> list[str]:
+    if not proxy_file or not proxy_file.exists():
+        return []
+
+    proxies: list[str] = []
+    for raw_line in proxy_file.read_text().splitlines():
+        proxy = normalize_proxy(raw_line)
+        if proxy:
+            proxies.append(proxy)
+
+    return proxies
+
+
 def is_image_url(url: str | None) -> bool:
     if not url:
         return False
@@ -135,7 +173,74 @@ def parse_response(payload: dict[str, Any], record: ReelRecord) -> ReelRecord:
     return record
 
 
-def fetch_record(url: str, fallback: ReelRecord | None, endpoint: str) -> ReelRecord:
+def is_retryable_error(error: str | None) -> bool:
+    if not error:
+        return False
+
+    return any(
+        marker in error.lower()
+        for marker in [
+            "too many requests",
+            "rate limit",
+            "timed out",
+            "timeout",
+            "connection",
+            "empty response",
+            "429",
+        ]
+    )
+
+
+def run_fetch_request(url: str, endpoint: str, proxy: str | None) -> str:
+    command = [
+        "curl",
+        endpoint,
+        "-sS",
+        "-X",
+        "POST",
+        "-H",
+        "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0",
+        "-H",
+        "Accept: */*",
+        "-H",
+        "Accept-Language: en-CA,en-US;q=0.9,en;q=0.8",
+        "-H",
+        "Referer: https://statusdownloader.com/instagram-story-downloader",
+        "-H",
+        "Content-Type: application/json",
+        "-H",
+        "Origin: https://statusdownloader.com",
+        "-H",
+        "Sec-Fetch-Dest: empty",
+        "-H",
+        "Sec-Fetch-Mode: cors",
+        "-H",
+        "Sec-Fetch-Site: same-origin",
+        "--data-raw",
+        request_payload(url),
+    ]
+    if proxy:
+        command.extend(["--proxy", proxy])
+
+    completed = subprocess.run(
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=45,
+    )
+    return completed.stdout.strip()
+
+
+def fetch_record(
+    url: str,
+    fallback: ReelRecord | None,
+    endpoint: str,
+    proxies: list[str],
+    proxy_offset: int,
+    retries: int,
+    retry_delay: float,
+) -> ReelRecord:
     record = fallback or ReelRecord(
         id=reel_id(url),
         title="Curate slot",
@@ -143,49 +248,29 @@ def fetch_record(url: str, fallback: ReelRecord | None, endpoint: str) -> ReelRe
         instagram_url=canonical_url(url),
     )
 
-    try:
-        completed = subprocess.run(
-            [
-                "curl",
-                endpoint,
-                "-sS",
-                "-X",
-                "POST",
-                "-H",
-                "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0",
-                "-H",
-                "Accept: */*",
-                "-H",
-                "Accept-Language: en-CA,en-US;q=0.9,en;q=0.8",
-                "-H",
-                "Referer: https://statusdownloader.com/instagram-story-downloader",
-                "-H",
-                "Content-Type: application/json",
-                "-H",
-                "Origin: https://statusdownloader.com",
-                "-H",
-                "Sec-Fetch-Dest: empty",
-                "-H",
-                "Sec-Fetch-Mode: cors",
-                "-H",
-                "Sec-Fetch-Site: same-origin",
-                "--data-raw",
-                request_payload(url),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=45,
-        )
-        stdout = completed.stdout.strip()
-        if not stdout:
-            record.error = "Empty response"
+    attempts = max(1, retries + 1)
+    for attempt in range(attempts):
+        proxy = proxies[(proxy_offset + attempt) % len(proxies)] if proxies else None
+        try:
+            stdout = run_fetch_request(url, endpoint, proxy)
+            if not stdout:
+                record.error = "Empty response"
+            else:
+                record = parse_response(json.loads(stdout), record)
+        except Exception as error:
+            record.error = str(error)
+
+        if not is_retryable_error(record.error) or attempt == attempts - 1:
             return record
 
-        return parse_response(json.loads(stdout), record)
-    except Exception as error:
-        record.error = str(error)
-        return record
+        time.sleep(retry_delay * (2 ** attempt))
+
+    return record
+
+
+def masked_proxy_count(proxies: list[str]) -> str:
+    return f"{len(proxies)} prox{'y' if len(proxies) == 1 else 'ies'}"
+
 
 
 def ts_string(value: str) -> str:
@@ -225,6 +310,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--url", action="append", help="Process this URL instead of instagram-reel-links.txt.")
     parser.add_argument("--workers", type=int, default=4, help="Parallel worker count.")
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
+    parser.add_argument(
+        "--proxy-file",
+        type=Path,
+        default=DEFAULT_PROXY_FILE,
+        help=f"Proxy list to rotate through. Defaults to {DEFAULT_PROXY_FILE}.",
+    )
+    parser.add_argument("--no-proxy", action="store_true", help="Do not use proxies, even if --proxy-file exists.")
+    parser.add_argument("--retries", type=int, default=2, help="Retry count per reel for retryable failures.")
+    parser.add_argument("--retry-delay", type=float, default=1.0, help="Initial retry delay in seconds.")
     return parser.parse_args()
 
 
@@ -240,11 +334,23 @@ def main() -> int:
 
     existing = existing_records()
     results: dict[str, ReelRecord] = {}
+    proxies = [] if args.no_proxy else read_proxies(args.proxy_file)
+    if proxies:
+        print(f"Loaded {masked_proxy_count(proxies)} from {args.proxy_file}")
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
-            executor.submit(fetch_record, url, existing.get(shortcode_for(url)), args.endpoint): url
-            for url in links
+            executor.submit(
+                fetch_record,
+                url,
+                existing.get(shortcode_for(url)),
+                args.endpoint,
+                proxies,
+                index,
+                args.retries,
+                args.retry_delay,
+            ): url
+            for index, url in enumerate(links)
         }
         for future in as_completed(futures):
             url = futures[future]

@@ -22,7 +22,7 @@ type FeedState = {
   remainingItems: PlayableReelItem[]
 }
 
-const MIN_REEL_DURATION_MS = 3000
+const MIN_REEL_DURATION_MS = 5000
 const REEL_DURATION_SPREAD_MS = 2000
 const REEL_START_TIME_SECONDS = 1
 const UP_NEXT_BUFFER_SIZE = 3
