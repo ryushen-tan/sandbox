@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import type { ReelItem } from "../types"
+import { useWebcam } from "../hooks/useWebcam"
 
 type ScrollReelsProps = {
   items: ReelItem[]
@@ -17,6 +18,8 @@ export function ScrollReels({ items }: ScrollReelsProps) {
   const [activeIndex, setActiveIndex] = useState(0)
   const reelRefs = useRef<Array<HTMLElement | null>>([])
   const videoRefs = useRef<Array<HTMLVideoElement | null>>([])
+  const webcamRef = useRef<HTMLVideoElement>(null)
+  useWebcam(webcamRef)
 
   const activeItem = items[activeIndex]
   const progressSegments = useMemo(
@@ -149,6 +152,17 @@ export function ScrollReels({ items }: ScrollReelsProps) {
       <aside className="absolute bottom-5 left-1/2 z-20 -translate-x-1/2 rounded-full border border-white/10 bg-black/55 px-5 py-2 text-sm text-stone-300 shadow-2xl backdrop-blur">
         empty bar
       </aside>
+
+      {/* Camera PiP — bottom right */}
+      <div className="absolute bottom-5 right-5 z-30 h-36 w-24 overflow-hidden rounded-2xl border border-white/15 shadow-2xl shadow-black/60">
+        <video
+          ref={webcamRef}
+          autoPlay
+          muted
+          playsInline
+          className="h-full w-full object-cover scale-x-[-1]"
+        />
+      </div>
     </main>
   )
 }
